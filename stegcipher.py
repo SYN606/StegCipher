@@ -1,72 +1,107 @@
-from typing import Dict, Any
+import argparse
+import sys
+import os
+from getpass import getpass
+from pathlib import Path
+from core import encrypt_for_steg, decrypt_from_steg
+from img_steg.embed import embed_payload, extract_payload
 
-from crypto.kdf import derive_key_new, derive_key_existing
-from crypto.cipher import encrypt, decrypt, CryptoError
-from crypto.format import pack_payload, unpack_payload, FormatError
-
-
-class StegCipherError(Exception):
-    """High-level StegCipher error."""
-
-
-def encrypt_for_steg(
-    plaintext: bytes,
-    password: bytes,
-    *,
-    kdf_method: str = "scrypt",
-) -> bytes:
-    """
-    Encrypt plaintext and prepare payload for image steganography.
-    """
-
-    if not isinstance(plaintext, (bytes, bytearray)):
-        raise TypeError("plaintext must be bytes")
-
-    if not isinstance(password, (bytes, bytearray)):
-        raise TypeError("password must be bytes")
-
-    # 1. Derive NEW key (encryption path)
-    key, salt, kdf_params = derive_key_new(password, method=kdf_method)
-
-    # 2. Encrypt plaintext
-    encrypted_data = encrypt(plaintext, key)
-
-    # 3. Metadata stored inside payload
-    metadata: Dict[str, Any] = {
-        "kdf": kdf_params,
-        "salt": salt.hex(),
-        "cipher": "AES-256-GCM",
-    }
-
-    # 4. Pack into binary payload
-    return pack_payload(encrypted_data, metadata)
+PROJECT_NAME = "StegCipher"
+AUTHOR = "SYN606"
+OUTPUT_DIR = "output"
 
 
-def decrypt_from_steg(
-    payload: bytes,
-    password: bytes,
-) -> bytes:
-    """
-    Decrypt payload extracted from an image.
-    """
+def encrypt_flow(text: str, image_path_str: str) -> None:
+    password = getpass("Enter password: ").encode()
+    confirm = getpass("Confirm password: ").encode()
 
-    if not isinstance(payload, (bytes, bytearray)):
-        raise TypeError("payload must be bytes")
+    if password != confirm:
+        raise RuntimeError("Passwords do not match")
 
-    if not isinstance(password, (bytes, bytearray)):
-        raise TypeError("password must be bytes")
+    plaintext = text.encode("utf-8")
+    payload = encrypt_for_steg(plaintext, password)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    img_path = Path(image_path_str)
+    out_image = Path(OUTPUT_DIR) / f"{img_path.stem}_steg{img_path.suffix}"
+
+    embed_payload(str(img_path), payload, str(out_image))
+
+    print(f"[+] Encrypted & hidden successfully")
+    print(f"[+] Output image: {out_image}")
+
+
+def decrypt_flow(image_path_str: str) -> None:
+    password = getpass("Enter password: ").encode()
+
+    raw_payload = extract_payload(image_path_str, payload_size_bytes=8192)
+    plaintext = decrypt_from_steg(raw_payload, password)
+
+    print("\n[+] Hidden message recovered:\n")
+    print(plaintext.decode("utf-8", errors="replace"))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="stegcipher",
+        description=f"{PROJECT_NAME} — Secure Image Steganography Tool\n"
+        f"Developed by {AUTHOR}",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--encrypt",
+        action="store_true",
+        help="Encrypt text and hide it inside an image",
+    )
+    parser.add_argument(
+        "--decrypt",
+        action="store_true",
+        help="Extract and decrypt hidden text from an image",
+    )
+    parser.add_argument(
+        "-t",
+        "--text",
+        help="Text to hide (required for --encrypt)",
+    )
+    parser.add_argument(
+        "-i",
+        "--image",
+        help="Input image path",
+    )
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+
+    # Show help if nothing is entered
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
+    args = parser.parse_args()
 
     try:
-        encrypted_data, metadata = unpack_payload(payload)
+        if args.encrypt:
+            if not args.text or not args.image:
+                raise RuntimeError("--encrypt requires --text and --image")
+            encrypt_flow(args.text, args.image)
 
-        kdf_params = metadata["kdf"]
-        salt = bytes.fromhex(metadata["salt"])
+        elif args.decrypt:
+            if not args.image:
+                raise RuntimeError("--decrypt requires --image")
+            decrypt_flow(args.image)
 
-        key = derive_key_existing(password, salt, kdf_params)
+        else:
+            parser.print_help()
 
-        return decrypt(encrypted_data, key)
+    except Exception as e:
+        print(f"[!] Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    except (KeyError, ValueError) as e:
-        raise StegCipherError("Invalid or missing metadata") from e
-    except (CryptoError, FormatError) as e:
-        raise StegCipherError("Decryption failed") from e
+
+if __name__ == "__main__":
+    main()
