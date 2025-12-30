@@ -1,8 +1,11 @@
+#!/usr/bin/env python3
+
 import argparse
 import sys
 import os
 from getpass import getpass
 from pathlib import Path
+
 from core import encrypt_for_steg, decrypt_from_steg
 from img_steg.embed import embed_payload, extract_payload
 
@@ -12,6 +15,11 @@ OUTPUT_DIR = "output"
 
 
 def encrypt_flow(text: str, image_path_str: str) -> None:
+    img_path = Path(image_path_str)
+
+    if not img_path.exists():
+        raise RuntimeError(f"Image not found: {img_path}")
+
     password = getpass("Enter password: ").encode()
     confirm = getpass("Confirm password: ").encode()
 
@@ -23,19 +31,25 @@ def encrypt_flow(text: str, image_path_str: str) -> None:
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    img_path = Path(image_path_str)
     out_image = Path(OUTPUT_DIR) / f"{img_path.stem}_steg{img_path.suffix}"
 
     embed_payload(str(img_path), payload, str(out_image))
 
-    print(f"[+] Encrypted & hidden successfully")
+    print("[+] Encrypted & hidden successfully")
     print(f"[+] Output image: {out_image}")
 
 
 def decrypt_flow(image_path_str: str) -> None:
+    img_path = Path(image_path_str)
+
+    if not img_path.exists():
+        raise RuntimeError(f"Image not found: {img_path}")
+
     password = getpass("Enter password: ").encode()
 
-    raw_payload = extract_payload(image_path_str, payload_size_bytes=8192)
+    # Upper bound; real length validated by format layer
+    raw_payload = extract_payload(str(img_path), payload_size_bytes=8192)
+
     plaintext = decrypt_from_steg(raw_payload, password)
 
     print("\n[+] Hidden message recovered:\n")
@@ -45,8 +59,8 @@ def decrypt_flow(image_path_str: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stegcipher",
-        description=f"{PROJECT_NAME} — Secure Image Steganography Tool\n"
-        f"Developed by {AUTHOR}",
+        description=(f"{PROJECT_NAME} — Secure Image Steganography Tool\n"
+                     f"Developed by {AUTHOR}"),
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
@@ -83,6 +97,10 @@ def main() -> None:
         sys.exit(0)
 
     args = parser.parse_args()
+
+    # Prevent ambiguous usage
+    if args.encrypt and args.decrypt:
+        parser.error("Choose either --encrypt or --decrypt, not both")
 
     try:
         if args.encrypt:

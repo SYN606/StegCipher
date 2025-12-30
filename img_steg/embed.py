@@ -1,7 +1,9 @@
-from typing import Iterable
+from pathlib import Path
+from typing import List
 
 from .bits import bytes_to_bits, bits_to_bytes, set_lsb, get_lsb
 from .image_io import load_image, save_image
+from .jpeg_dct import embed_jpeg
 
 
 class StegError(Exception):
@@ -11,8 +13,7 @@ class StegError(Exception):
 
 def _image_capacity_bits(img) -> int:
     """
-    Calculate embedding capacity in bits.
-    We use 1 LSB per RGB channel.
+    Capacity for LSB embedding: 1 bit per RGB channel.
     """
     width, height = img.size
     return width * height * 3
@@ -24,12 +25,54 @@ def embed_payload(
     output_image: str,
 ) -> None:
     """
-    Embed payload bytes into an image using LSB steganography.
+    Embed payload bytes into an image.
 
-    - Lossless images only (enforced by load_image)
-    - 1 bit per RGB channel
+    Dispatches automatically:
+    - PNG/BMP/TIFF/WebP → LSB embedding
+    - JPG/JPEG          → DCT-domain embedding
     """
 
+    ext = Path(input_image).suffix.lower()
+
+    # JPEG → DCT domain
+    if ext in (".jpg", ".jpeg"):
+        bits = bytes_to_bits(payload)
+        embed_jpeg(bits, input_image, output_image)
+        return
+
+    # Lossless formats → LSB
+    _embed_lsb(input_image, payload, output_image)
+
+
+def extract_payload(
+    image_path: str,
+    payload_size_bytes: int,
+) -> bytes:
+    """
+    Extract payload bytes from an image.
+
+    NOTE:
+    - For PNG/BMP/TIFF/WebP → works via LSB
+    - For JPG/JPEG → NOT IMPLEMENTED (DCT extraction required)
+    """
+
+    ext = Path(image_path).suffix.lower()
+
+    if ext in (".jpg", ".jpeg"):
+        raise StegError("JPEG extraction is not implemented yet "
+                        "(DCT-domain extraction required)")
+
+    return _extract_lsb(image_path, payload_size_bytes)
+
+
+# LSB implementation (lossless formats)
+
+
+def _embed_lsb(
+    input_image: str,
+    payload: bytes,
+    output_image: str,
+) -> None:
     img = load_image(input_image)
     pixels = img.load()
 
@@ -66,24 +109,16 @@ def embed_payload(
     save_image(img, output_image)
 
 
-def extract_payload(
+def _extract_lsb(
     image_path: str,
     payload_size_bytes: int,
 ) -> bytes:
-    """
-    Extract payload bytes from an image.
-
-    NOTE:
-    - payload_size_bytes must be known
-    - higher layers (crypto/format) ensure correctness
-    """
-
     img = load_image(image_path)
     pixels = img.load()
 
     width, height = img.size
     total_bits_needed = payload_size_bytes * 8
-    bits = []
+    bits: List[int] = []
 
     for y in range(height):
         for x in range(width):
@@ -101,6 +136,6 @@ def extract_payload(
             bits.append(get_lsb(b))
 
     if len(bits) < total_bits_needed:
-        raise StegError("Image does not contain enough data")
+        raise StegError("Image does not contain enough embedded data")
 
     return bits_to_bytes(bits)
